@@ -1,5 +1,5 @@
 # joint-fairness-model
-Implementation of the paper Joint Fairness Model (JFM) with Applications to Risk Predictions for Under-represented Populations
+Implementation of the paper Joint Fairness Model (JFM) with Applications to Risk Predictions for Under-represented Populations (https://arxiv.org/abs/2105.04648).
 
 ## Dependencies
 - [anaconda3](https://www.anaconda.com/download/) (>= 4.8.3)

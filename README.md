@@ -17,7 +17,7 @@ Users have to compile the enclosed cython source code (tested on Windows 10, mac
 ```
 git clone https://github.com/hyungrok-do/joint-fairness-model
 cd joint-fairness-model
-python setup.py build_ext --inplace
+python setup.py build_ext --build-lib ./models
 ```
 
 ---

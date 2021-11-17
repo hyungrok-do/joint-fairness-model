@@ -8,7 +8,7 @@ from models import LogisticSingleFair
 from models import LogisticJointFair
 from models import get_max_lambda
 from models import GroupStratifiedKFold
-from measures import HarmonicMeanGroupAUC
+from measures import HarmonicMeanGroupBrierScore, OverallBrierScore
 from simulation import Evaluate
 from simulation import DataGenerator
 from simulation import SimulationArgumentParser
@@ -49,7 +49,7 @@ test_y2 = test_y[test_x[:,0] == 1]
 
 model_names = ['Group-separate',
                'Group-ignorant',
-               'SFM', 'JFM']
+               'SFM', 'JFM-F', 'JFM-G']
 
 max_lam = get_max_lambda(train_x, train_y)
 max_lam_1 = get_max_lambda(train_x1, train_y1)
@@ -59,28 +59,36 @@ models = [LogisticLasso(),
           LogisticLasso(),
           LogisticLasso(),
           LogisticSingleFair(),
-          LogisticJointFair()]
+          LogisticJointFair(similarity='fusion'),
+          LogisticJointFair(similarity='group')]
 
 param_grids = [
-    {'lam': np.exp(np.linspace(np.log(max_lam_1), np.log(max_lam_1 * 1e-6), 50))},
-    {'lam': np.exp(np.linspace(np.log(max_lam_2), np.log(max_lam_2 * 1e-6), 50))},
+    {'lam': np.exp(np.linspace(np.log(max_lam_1), np.log(max_lam_1 * 1e-3), 50))},
+    {'lam': np.exp(np.linspace(np.log(max_lam_2), np.log(max_lam_2 * 1e-3), 50))},
 
-    {'lam': np.exp(np.linspace(np.log(max_lam), np.log(max_lam * 1e-6), 50))},
+    {'lam': np.exp(np.linspace(np.log(max_lam), np.log(max_lam * 1e-3), 50))},
 
-    {'lam1': np.exp(np.linspace(np.log(max_lam), np.log(max_lam * 1e-6), 50)),
+    {'lam1': np.exp(np.linspace(np.log(max_lam), np.log(max_lam * 1e-3), 50)),
      'lam2': 10. ** np.arange(-4, 2.1, 1)},
 
-    {'lam1': np.exp(np.linspace(np.log(max_lam_1), np.log(max_lam_1 * 1e-6), 20)),
-     'lam2': np.exp(np.linspace(np.log(max_lam_2), np.log(max_lam_2 * 1e-6), 20)),
+    {'lam1': np.exp(np.linspace(np.log(max_lam_1), np.log(max_lam_1 * 1e-3), 20)),
+     'lam2': np.exp(np.linspace(np.log(max_lam_2), np.log(max_lam_2 * 1e-3), 20)),
      'lam3': 10. ** np.arange(-4, 2.1, 1),
-     'lam4': 10. ** np.arange(-4, 2.1, 1)}]
+     'lam4': 10. ** np.arange(-4, 2.1, 1)},
+
+     {'lam1': np.exp(np.linspace(np.log(max_lam_1), np.log(max_lam_1 * 1e-3), 20)),
+      'lam2': np.exp(np.linspace(np.log(max_lam_2), np.log(max_lam_2 * 1e-3), 20)),
+      'lam3': 10. ** np.arange(-4, 2.1, 1),
+      'lam4': 10. ** np.arange(-4, 2.1, 1)}
+]
 
 scorings = [
-    'roc_auc',
-    'roc_auc',
-    'roc_auc',
-    HarmonicMeanGroupAUC,
-    HarmonicMeanGroupAUC]
+    OverallBrierScore,
+    OverallBrierScore,
+    OverallBrierScore,
+    HarmonicMeanGroupBrierScore,
+    HarmonicMeanGroupBrierScore,
+    HarmonicMeanGroupBrierScore]
 
 results_table = []
 
@@ -96,7 +104,10 @@ best_model_group_2 = cv.best_estimator_
 
 results_table.append(Evaluate(test_y1, test_y2,
                               best_model_group_1.predict_proba(test_x1[:,1:])[:,1],
-                              best_model_group_2.predict_proba(test_x2[:,1:])[:,1]))
+                              best_model_group_2.predict_proba(test_x2[:,1:])[:,1],
+                              Generator.b1, Generator.b2,
+                              best_model_group_1.coef_, best_model_group_2.coef_
+                              ))
 
 for param, model, scoring in zip(param_grids[2:], models[2:], scorings[2:]):
     np.random.seed(args.seed)
@@ -107,10 +118,18 @@ for param, model, scoring in zip(param_grids[2:], models[2:], scorings[2:]):
 
     for key in cv.best_params_:
         print(key, cv.best_params_[key])
-        
+
+    try:
+        pred_b1 = cv.best_estimator_.coef_0_
+        pred_b2 = cv.best_estimator_.coef_1_
+    except:
+        pred_b1 = cv.best_estimator_.coef_[1:]
+        pred_b2 = cv.best_estimator_.coef_[1:]
     results_table.append(Evaluate(test_y1, test_y2,
                          cv.best_estimator_.predict_proba(test_x1)[:,1],
-                         cv.best_estimator_.predict_proba(test_x2)[:,1]))
+                         cv.best_estimator_.predict_proba(test_x2)[:,1],
+                         Generator.b1, Generator.b2,
+                         pred_b1, pred_b2))
 
 results_table = pd.DataFrame(results_table, index=model_names)
 print(results_table)

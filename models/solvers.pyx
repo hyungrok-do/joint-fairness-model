@@ -219,7 +219,7 @@ def single_fair_logistic_solver(double[:,:] x, double[:] y, double[:,:] F, doubl
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def joint_fair_logistic_solver(double[:,:] x_1, double[:,:] x_2, double[:] y_1, double[:] y_2,
+def joint_fair_logistic_fusion_solver(double[:,:] x_1, double[:,:] x_2, double[:] y_1, double[:] y_2,
                                double[:] D0, double[:] D1, double t, double mu,
                                double[:] lam1, double lam4, int maxiter, double tol):
     # Note: x_1 is an array of size (n_1, p) but its transpose x_1.T of size (p, n_1) is passed to this function (for blas subroutine)
@@ -324,6 +324,139 @@ def joint_fair_logistic_solver(double[:,:] x_1, double[:,:] x_2, double[:] y_1, 
             beta[j] = soft_thresholding(alpha[j], lam1[0])
             beta[j+p] = soft_thresholding(alpha[j+p], lam1[1])
 
+        if vecnorm(vecsub(_beta, beta, p), p) < tol:
+            break
+
+        s[1] = (1 + sqrt(1 + 4 * s[0] * s[0])) * 0.5
+        mm = (s[0] - 1) / s[1]
+
+        momentum = vecsub(beta, _beta, pp)
+        dscal(&pp, &mm, &momentum[0], &one)
+        gamma = vecadd(beta, momentum, pp)
+
+        s[0] = s[1]
+
+    return np.array(beta)
+
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def joint_fair_logistic_group_solver(double[:,:] x_1, double[:,:] x_2, double[:] y_1, double[:] y_2,
+                                     double[:] D0, double[:] D1, double t, double mu,
+                                     double[:] lam1, double lam4, int maxiter, double tol):
+    # Note: x_1 is an array of size (n_1, p) but its transpose x_1.T of size (p, n_1) is passed to this function (for blas subroutine)
+    # Note: x_2 is an array of size (n_2, p) but its transpose x_2.T of size (p, n_2) is passed to this function (for blas subroutine)
+
+    cdef int n_1 = x_1.shape[1]
+    cdef int n_2 = x_2.shape[1]
+    cdef int p = x_1.shape[0]
+
+    cdef int pp = 2*p
+
+    cdef double[:] beta = np.zeros(pp)
+    cdef double[:] _beta = np.zeros(pp)
+    cdef double[:] alpha = np.zeros(pp)
+    cdef double[:] gamma = np.zeros(pp)
+    cdef double[:] grad = np.zeros(pp)
+    cdef double[:] grad_F = np.zeros(pp)
+    cdef double[:] momentum = np.zeros(pp)
+
+    cdef double a_0
+    cdef double a_1
+    cdef double[:] a_2 = np.zeros(p)
+    cdef double[:] s = np.ones(2)
+    cdef double[:] xb_1 = np.zeros(n_1)
+    cdef double[:] xb_2 = np.zeros(n_2)
+    cdef double[:] err_1 = np.zeros(n_1)
+    cdef double[:] err_2 = np.zeros(n_2)
+    cdef double[:] pr_1 = np.zeros(n_1)
+    cdef double[:] pr_2 = np.zeros(n_2)
+
+    cdef double double_zero = 0
+    cdef double double_one = 1
+    cdef double negative_one = -1
+    cdef int one = 1
+    cdef double mm = 1
+    cdef double mu_inv = 1/mu
+    cdef double n_1_inv = 1/np.float64(n_1)
+    cdef double n_2_inv = 1/np.float64(n_2)
+
+    cdef int i
+    cdef int j
+    cdef double threshold_denom = 0.
+
+    for i in range(maxiter):
+        # get xb = matmul(x, gamma)
+        dgemv('T', &p, &n_1, &double_one, &x_1[0,0], &p, &gamma[0], &one, &double_zero, &xb_1[0], &one)
+        dgemv('T', &p, &n_2, &double_one, &x_2[0,0], &p, &gamma[p], &one, &double_zero, &xb_2[0], &one)
+
+        pr_1 = logistic(xb_1, n_1)
+        pr_2 = logistic(xb_2, n_2)
+
+        err_1 = vecsub(pr_1, y_1, n_1)
+        err_2 = vecsub(pr_2, y_2, n_2)
+
+        dgemv('N', &p, &n_1, &double_one, &x_1[0,0], &p, &err_1[0], &one, &double_zero, &grad[0], &one)
+        dgemv('N', &p, &n_2, &double_one, &x_2[0,0], &p, &err_2[0], &one, &double_zero, &grad[p], &one)
+
+        dscal(&p, &n_1_inv, &grad[0], &one)
+        dscal(&p, &n_2_inv, &grad[p], &one)
+
+        a_0 = ddot(&pp, &D0[0], &one, &gamma[0], &one)*mu_inv
+        a_1 = ddot(&pp, &D1[0], &one, &gamma[0], &one)*mu_inv
+
+        for j in range(p):
+            a_2[j] = gamma[j] - gamma[j+p]
+
+        dscal(&p, &lam4, &a_2[0], &one)
+        dscal(&p, &mu_inv, &a_2[0], &one)
+
+        # apply L-inf Ball Projection on a
+        a_0 = LinfBallProjection(a_0)
+        a_1 = LinfBallProjection(a_1)
+        for j in range(p):
+            a_2[j] = LinfBallProjection(a_2[j])
+
+        dscal(&pp, &a_0, &D0[0], &one)
+        dscal(&pp, &a_1, &D1[0], &one)
+        #grad_F = vecadd(D0, D1, p)
+
+        #grad_F[:p] = vecadd(grad_F[:p], a_2, p)
+        #grad_F[p:] = vecsub(grad_F[p:], a_2, p)
+        dcopy(&p, &a_2[0], &one, &grad_F[0], &one)
+        dcopy(&p, &a_2[0], &one, &grad_F[p], &one)
+        dscal(&p, &negative_one, &grad_F[p], &one)
+
+        dscal(&pp, &lam4, &grad_F[0], &one)
+
+        grad_F = vecadd(grad_F, D0, pp)
+        grad_F = vecadd(grad_F, D1, pp)
+
+        grad = vecadd(grad, grad_F, pp)
+
+        # multiply by step size
+        dscal(&pp, &t, &grad[0], &one)
+
+        # apply gradient
+        alpha = vecsub(gamma, grad, pp)
+
+        dcopy(&pp, &beta[0], &one, &_beta[0], &one)
+        dcopy(&pp, &alpha[0], &one, &beta[0], &one)
+
+        for j in range(1, p):
+            alpha[j] = soft_thresholding(alpha[j], lam1[0])
+            alpha[j+p] = soft_thresholding(alpha[j+p], lam1[1])
+
+            threshold_denom = sqrt(alpha[j]*alpha[j] + alpha[j+p]*alpha[j+p])
+            if threshold_denom == 0:
+                beta[j] = 0
+                beta[j+p] = 0
+            else:
+                beta[j] = max(1 - (t*lam4*sqrt(2) / threshold_denom), 0) * alpha[j]
+                beta[j+p] = max(1 - (t*lam4*sqrt(2) / threshold_denom), 0) * alpha[j+p]
+
+            #print(np.array(beta))
         if vecnorm(vecsub(_beta, beta, p), p) < tol:
             break
 

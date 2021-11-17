@@ -2,9 +2,12 @@
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator
+from sklearn.utils.multiclass import unique_labels
 from .solvers import logistic_lasso_gradient_solver
 from .solvers import single_fair_logistic_solver
-from .solvers import joint_fair_logistic_solver
+from .solvers import joint_fair_logistic_fusion_solver
+from .solvers import joint_fair_logistic_group_solver
+
 
 global MAXITER
 MAXITER = 1000
@@ -31,7 +34,7 @@ class LogisticLasso(BaseEstimator):
     coef_ : numpy.ndarray of shape (n_features,)
         Estimated coefficients for logistic lasso model.
     """
-    def __init__(self, lam=0.1, fit_intercept=True, maxiter=MAXITER, tol=1e-3):
+    def __init__(self, lam=0.1, fit_intercept=True, maxiter=MAXITER, tol=1e-4):
         assert lam > 0, 'parameter lam must be positive real value'
 
         self.lam = lam
@@ -55,6 +58,7 @@ class LogisticLasso(BaseEstimator):
         if type(y) == pd.DataFrame:
             y = y.values.flatten()
         y = y.astype(np.float64)
+        self.classes_ = unique_labels(y)
 
         if self.fit_intercept:
             X = np.column_stack([np.ones(len(X)), X])
@@ -142,7 +146,7 @@ class LogisticSingleFair(BaseEstimator):
         Estimated coefficients for logistic lasso model.
     """
 
-    def __init__(self, lam1=0.1, lam2=0.1, protected_idx=0, fit_intercept=True, maxiter=MAXITER, mu=1e-3, tol=1e-3):
+    def __init__(self, lam1=0.1, lam2=0.1, protected_idx=0, fit_intercept=True, maxiter=MAXITER, mu=1e-3, tol=1e-4):
         assert lam1 > 0, 'parameter lam1 must be positive real value'
         assert lam2 > 0, 'parameter lam2 must be positive real value'
 
@@ -169,10 +173,11 @@ class LogisticSingleFair(BaseEstimator):
         if type(y) == pd.DataFrame:
             y = y.values.flatten()
         A = X[:, self.protected_idx]
-        X = np.delete(X, self.protected_idx, axis=1)
+        #X = np.delete(X, self.protected_idx, axis=1)
         X = np.column_stack([np.ones(len(X)), X])
         y = y.astype(np.float64)
         n = len(y)
+        self.classes_ = unique_labels(y)
 
         x_0, x_1, y_0, y_1 = self._split_by_protected_value(A, X, y)
 
@@ -213,7 +218,7 @@ class LogisticSingleFair(BaseEstimator):
             Estimated probability matrix.
 
         """
-        X = np.delete(X, self.protected_idx, axis=1)
+        #X = np.delete(X, self.protected_idx, axis=1)
         X = np.column_stack([np.ones(len(X)), X])
         xb = X.dot(self.coef_)
         p = 1. / (1. + np.exp(-xb))
@@ -252,7 +257,7 @@ class LogisticSingleFair(BaseEstimator):
 
 
 class LogisticJointFair(BaseEstimator):
-    def __init__(self, lam1=0.1, lam2=0.1, lam3=0.1, lam4=0.1, protected_idx=0, fit_intercept=True, maxiter=MAXITER, tol=1e-3, mu=1e-3):
+    def __init__(self, lam1=0.1, lam2=0.1, lam3=0.1, lam4=0.1, protected_idx=0, similarity='fusion', fit_intercept=True, maxiter=MAXITER, tol=1e-4, mu=1e-3):
         """ Logistic Joint Fairness model with L1 and Fairness Penalty.
 
         Currently, this class only provides two-group cases to reproduce the simulation results presented in the paper.
@@ -300,6 +305,7 @@ class LogisticJointFair(BaseEstimator):
         self.maxiter = maxiter
         self.tol = tol
         self.mu = mu
+        self.similarity = similarity
 
     def fit(self, X, y):
         if type(y) == pd.DataFrame:
@@ -308,31 +314,52 @@ class LogisticJointFair(BaseEstimator):
         X = np.delete(X, self.protected_idx, axis=1)
         X = np.column_stack([np.ones(len(X)), X])
         y = y.astype(np.float64)
+        self.classes_ = unique_labels(y)
 
         p = X.shape[1]
 
         x_1, x_2, y_1, y_2 = self._split_by_protected_value(A, X, y)
-        F = self.lam4 * np.column_stack([np.identity(p), -np.identity(p)])
 
         n_1, n_2 = float(len(y_1)), float(len(y_2))
 
         D0 = self.lam3 * np.concatenate([x_1[y_1 == 0].mean(0), -x_2[y_2 == 0].mean(0)])
         D1 = self.lam3 * np.concatenate([x_1[y_1 == 1].mean(0), -x_2[y_2 == 1].mean(0)])
-        D = np.row_stack([D0, D1, F])
-        L1 = np.max([
-            np.max(np.linalg.eigvalsh(np.dot(x_1.T, x_1) / n_1)),
-            np.max(np.linalg.eigvalsh(np.dot(x_2.T, x_2) / n_2))]) / 4
-        L2 = np.max(np.linalg.eigvalsh(D.T.dot(D))) / self.mu
-        t = 1 / (L1 + L2)
-        del D, F
 
-        lam1 = np.array([self.lam1, self.lam2])*t
-        lam4 = np.double(self.lam4)
-        maxiter = np.int(self.maxiter)
-        tol = np.double(self.tol)
-        mu = np.double(self.mu)
-        t = np.double(t)
-        beta = joint_fair_logistic_solver(x_1.T, x_2.T, y_1, y_2, D0, D1, t, mu, lam1, lam4, maxiter, tol)
+        if self.similarity == 'fusion':
+            F = self.lam4 * np.column_stack([np.identity(p), -np.identity(p)])
+            D = np.row_stack([D0, D1, F])
+            L1 = np.max([
+                np.max(np.linalg.eigvalsh(np.dot(x_1.T, x_1) / n_1)),
+                np.max(np.linalg.eigvalsh(np.dot(x_2.T, x_2) / n_2))]) / 4
+            L2 = np.max(np.linalg.eigvalsh(D.T.dot(D))) / self.mu
+            t = 1 / (L1 + L2)
+            del D, F
+
+            lam1 = np.array([self.lam1, self.lam2])*t
+            lam4 = np.double(self.lam4)
+            maxiter = np.int(self.maxiter)
+            tol = np.double(self.tol)
+            mu = np.double(self.mu)
+            t = np.double(t)
+            beta = joint_fair_logistic_fusion_solver(x_1.T, x_2.T, y_1, y_2, D0, D1, t, mu, lam1, lam4, maxiter, tol)
+        else:
+            D = np.row_stack([D0, D1])
+            L1 = np.max([
+                np.max(np.linalg.eigvalsh(np.dot(x_1.T, x_1) / n_1)),
+                np.max(np.linalg.eigvalsh(np.dot(x_2.T, x_2) / n_2))]) / 4
+            L2 = np.max(np.linalg.eigvalsh(D.T.dot(D))) / self.mu
+            t = 1 / (L1 + L2)
+            del D
+
+            lam1 = np.array([self.lam1, self.lam2]) * t
+            lam4 = np.double(self.lam4)
+            maxiter = np.int(self.maxiter)
+            tol = np.double(self.tol)
+            mu = np.double(self.mu)
+            t = np.double(t)
+            beta = joint_fair_logistic_group_solver(x_1.T, x_2.T, y_1, y_2, D0, D1, t, mu, lam1, lam4, maxiter, tol)
+
+
         beta = beta.reshape(2, -1)
 
         self.coef_ = beta

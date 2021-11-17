@@ -146,8 +146,15 @@ def make_plot(scenario, measure, title, dpi=400):
     plt.close()
 
 
-measures = ['All-AUC', 'Group1-AUC', 'Group2-AUC', 'AUC-DIFF']
-titles = ['Overall AUC', 'AUC of the Over-represented Group', 'AUC of the Under-represented Group', 'Disparity of AUC']
+
+measures = ['All-AUC', 'Group1-AUC', 'Group2-AUC', 'AUC-DIFF',
+            'All-NZBIAS', 'Group1-NZBIAS', 'Group2-NZBIAS',
+            'All-COEFSEN', 'Group1-COEFSEN', 'Group2-COEFSEN',
+            'All-COEFSPE', 'Group1-COEFSPE', 'Group2-COEFSPE']
+titles = ['Overall AUC', 'AUC of the Over-represented Group', 'AUC of the Under-represented Group', 'Disparity of AUC',
+          'Overall Coefficient Bias', 'Bias of the Over-represented Group', 'Bias of the Under-represented Group',
+          'Overall Selection Sensitivity', 'Selection Sensitivity of the Over-represented Group', 'Selection Sensitivity of the Under-represented Group',
+          'Overall Specificity Sensitivity', 'Selection Specificity of the Over-represented Group', 'Selection Specificity of the Under-represented Group']
 
 for scenario in [1, 2, 3, 4, '1b', '2b', '3b', '4b']:
     for measure, title in zip(measures, titles):
